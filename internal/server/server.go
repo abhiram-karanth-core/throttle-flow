@@ -1,16 +1,19 @@
 package server
 
 import (
-	"github.com/go-redis/redis"
+	"throttle-flow/internal/limiter"
+
 	_ "github.com/joho/godotenv/autoload"
+	"github.com/redis/go-redis/v9"
 )
 
 type Server struct {
-	rdb *redis.Client
+	limiter limiter.Limiter
 }
 
 func NewServer(rdb *redis.Client) *Server {
 	return &Server{
-		rdb: rdb,
+
+		limiter: limiter.NewWindowLimiter(rdb),
 	}
 }

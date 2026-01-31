@@ -1,40 +1,83 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
-	"log"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 )
 
-func (s *Server) RegisterRoutes() http.Handler {
-	r := chi.NewRouter()
-	r.Use(middleware.Logger)
+type CheckRequest struct {
+	Key      string `json:"key"`
+	Limit    int    `json:"limit"`
+	WindowMS int64  `json:"window_ms"`
+}
 
+type CheckResponse struct {
+	Allowed   bool `json:"allowed"`
+	Remaining int  `json:"remaining"`
+}
+
+func Routes(s *Server) chi.Router {
+	r := chi.NewRouter()
+
+	// middleware
+	r.Use(chimw.Logger)
+	r.Use(chimw.Recoverer)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"https://*", "http://*"},
+		AllowedOrigins:   []string{"http://*", "https://*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
 
-	r.Get("/", s.HelloWorldHandler)
-
+	// routes
+	r.Get("/health", s.Health)
+	r.Post("/check", s.Check)
 	return r
 }
+func (s *Server) Health(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ok"))
+}
+func (s *Server) Check(w http.ResponseWriter, r *http.Request) {
+	var req CheckRequest
 
-func (s *Server) HelloWorldHandler(w http.ResponseWriter, r *http.Request) {
-	resp := make(map[string]string)
-	resp["message"] = "Hello World"
-
-	jsonResp, err := json.Marshal(resp)
-	if err != nil {
-		log.Fatalf("error handling JSON marshal. Err: %v", err)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
 	}
 
-	_, _ = w.Write(jsonResp)
+	if req.Key == "" || req.Limit <= 0 || req.WindowMS <= 0 {
+		http.Error(w, "invalid parameters", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Millisecond)
+	defer cancel()
+
+	allowed, remaining, err := s.limiter.Allow(
+		ctx,
+		req.Key,
+		req.Limit,
+		time.Duration(req.WindowMS)*time.Millisecond,
+	)
+
+	if err != nil {
+		http.Error(w, "rate limiter error", http.StatusInternalServerError)
+		return
+	}
+
+	resp := CheckResponse{
+		Allowed:   allowed,
+		Remaining: remaining,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
