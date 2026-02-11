@@ -58,7 +58,7 @@ func (s *Server) Check(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
 	defer cancel()
 
 	allowed, remaining, err := s.limiter.Allow(
@@ -69,8 +69,14 @@ func (s *Server) Check(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err != nil {
-		http.Error(w, "rate limiter error", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if !allowed {
+		w.WriteHeader(http.StatusTooManyRequests) // 429
+	} else {
+		w.WriteHeader(http.StatusOK)
 	}
 
 	resp := CheckResponse{
@@ -78,6 +84,5 @@ func (s *Server) Check(w http.ResponseWriter, r *http.Request) {
 		Remaining: remaining,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
