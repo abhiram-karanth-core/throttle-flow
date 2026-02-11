@@ -16,7 +16,7 @@ func NewWindowLimiter(rdb *redis.Client) *WindowLimiter {
 	return &WindowLimiter{
 		rdb: rdb,
 	}
-}	
+}
 
 func (l *WindowLimiter) Allow(
 	ctx context.Context,
@@ -27,7 +27,16 @@ func (l *WindowLimiter) Allow(
 	now := time.Now().UTC()
 	windowStart := now.Truncate(window).Unix()
 	redisKey := fmt.Sprintf("rl:%s:%d", key, windowStart)
-	count, err := l.rdb.Incr(ctx, redisKey).Result() //counter is incremented here.
+	var script = redis.NewScript(`
+	local current = redis.call("INCR", KEYS[1])
+	if current == 1 then
+	redis.call("PEXPIRE", KEYS[1], ARGV[1])
+	end
+	return current
+	`)
+	// count, err := l.rdb.Incr(ctx, redisKey).Result() //counter is incremented here.
+	count, err := script.Run(ctx, l.rdb, []string{redisKey}, window.Milliseconds()).Int64()
+
 	if err != nil {
 		return false, 0, err
 	}
@@ -36,10 +45,8 @@ func (l *WindowLimiter) Allow(
 			return false, 0, err
 		}
 	}
-	remaining := limit - int(count)
-	if remaining < 0 {
-		return false, 0, nil
-	}
-	return true, remaining, nil
-}
+	remaining := max(0, limit-int(count))
+	allowed := count <= int64(limit)
+	return allowed, remaining, nil
 
+}
